@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
 
 export default function Home() {
+  const { data: session } = useSession();
+  const isLoggedIn = !!session;
+
   const [text, setText] = useState("");
   const [language, setLanguage] = useState("English");
-  const [voice, setVoice] = useState("female");
+  const [voice, setVoice] = useState("en-IN-NeerjaNeural");
 
   const [speed, setSpeed] = useState(0);
   const [pitch, setPitch] = useState(0);
@@ -15,73 +18,212 @@ export default function Home() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const applyMood = (spd: number, ptc: number) => {
+  // Load Razorpay script
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    document.body.appendChild(script);
+  }, []);
+
+  // 🎙 Voice Map
+  const voiceOptions: any = {
+    English: [
+      { label: "Female (India)", value: "en-IN-NeerjaNeural" },
+      { label: "Male (India)", value: "en-IN-PrabhatNeural" }
+    ],
+    Hindi: [
+      { label: "Female (India)", value: "hi-IN-SwaraNeural" },
+      { label: "Male (India)", value: "hi-IN-MadhurNeural" }
+    ],
+    Urdu: [
+      { label: "Female 1", value: "ur-IN-GulNeural" },
+      { label: "Female 2", value: "ur-PK-UzmaNeural" },
+      { label: "Male 1", value: "ur-IN-SalmanNeural" },
+      { label: "Male 2", value: "ur-PK-AsadNeural" }
+    ]
+  };
+
+  useEffect(() => {
+    setVoice(voiceOptions[language][0].value);
+  }, [language]);
+
+  // 🎭 Mood Logic
+  const applyMood = () => {
     switch (mood) {
-      case "happy": return { speed: 20, pitch: 10 };
-      case "sad": return { speed: -20, pitch: -10 };
-      case "angry": return { speed: 30, pitch: 15 };
-      case "excited": return { speed: 40, pitch: 20 };
-      case "funny": return { speed: 10, pitch: 20 };
-      case "shocked": return { speed: 25, pitch: 30 };
-      default: return { speed: spd, pitch: ptc };
+      case "happy": return { rate: "+20%", pitch: "+10Hz" };
+      case "sad": return { rate: "-20%", pitch: "-10Hz" };
+      case "angry": return { rate: "+30%", pitch: "+15Hz" };
+      case "excited": return { rate: "+40%", pitch: "+20Hz" };
+      default:
+        return {
+          rate: `${speed >= 0 ? "+" : ""}${speed}%`,
+          pitch: `${pitch >= 0 ? "+" : ""}${pitch}Hz`
+        };
     }
   };
 
-  const formatRate = (v: number) => `${v >= 0 ? "+" : ""}${v}%`;
-  const formatPitch = (v: number) => `${v >= 0 ? "+" : ""}${v}Hz`;
-
+  // 🎯 Generate Audio
   const convertAudio = async () => {
-    if (!text.trim()) return alert("Enter text");
+    if (!text.trim()) return;
 
     setLoading(true);
+    setAudioUrl(null);
 
     try {
-      const adjusted = applyMood(speed, pitch);
+      const moodSettings = applyMood();
 
       const res = await fetch("http://127.0.0.1:8000/generate-audio", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           text,
           language,
           voice,
-          rate: formatRate(adjusted.speed),
-          pitch: formatPitch(adjusted.pitch)
+          rate: moodSettings.rate,
+          pitch: moodSettings.pitch
         })
       });
 
       const data = await res.json();
       setAudioUrl(data.audio_url);
-    } catch (err) {
-      console.error(err);
+    } catch {
       alert("Error generating audio");
     }
 
     setLoading(false);
   };
 
+  // 💰 Download + Payment Logic (SECURE)
+  const handleDownload = async (url: string) => {
+    if (!isLoggedIn) {
+      signIn("google");
+      return;
+    }
+
+    // Step 1: Check free usage
+    const res = await fetch("/api/track-download", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        email: session?.user?.email
+      })
+    });
+
+    const data = await res.json();
+
+    // ✅ Free allowed
+    if (data.allowed) {
+      window.open(url);
+      return;
+    }
+
+    // 💰 Paid flow
+    const orderRes = await fetch("/api/create-order", {
+      method: "POST"
+    });
+
+    const order = await orderRes.json();
+
+    const options = {
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: "INR",
+      name: "TTS Audio",
+      description: "Audio Download",
+      order_id: order.id,
+
+      handler: async function (response: any) {
+        try {
+          const verifyRes = await fetch("/api/verify-payment", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature
+            })
+          });
+
+          const verifyData = await verifyRes.json();
+
+          if (verifyData.success) {
+            alert("Payment verified ✅");
+            window.open(url);
+          } else {
+            alert("Payment verification failed ❌");
+          }
+
+        } catch {
+          alert("Verification error");
+        }
+      },
+
+      prefill: {
+        email: session?.user?.email
+      },
+
+      theme: {
+        color: "#6366f1"
+      }
+    };
+
+    const rzp = new (window as any).Razorpay(options);
+    rzp.open();
+  };
+
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-blue-500 to-indigo-600">
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-600 via-blue-500 to-indigo-600 text-white">
 
-      <motion.div
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white/10 backdrop-blur-xl p-6 rounded-2xl shadow-2xl w-[520px] text-white"
-      >
+      <div className="bg-white/10 backdrop-blur-xl p-6 rounded-2xl shadow-2xl w-[520px]">
 
-        <h1 className="text-3xl font-bold text-center mb-4">
+        <h1 className="text-3xl font-bold text-center mb-2">
           🎙 Text to Audio
         </h1>
 
+        <p className="text-center text-sm mb-4 opacity-80">
+          ✨ 3 Free downloads per day • ₹2 per download after
+        </p>
+
+        {/* Login */}
+        <div className="mb-4 flex justify-between items-center">
+          {isLoggedIn ? (
+            <>
+              <span className="text-sm truncate">
+                👤 {session?.user?.email}
+              </span>
+              <button
+                onClick={() => signOut()}
+                className="bg-red-500 px-3 py-1 rounded text-sm"
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => signIn("google")}
+              className="w-full bg-blue-500 p-2 rounded"
+            >
+              Login
+            </button>
+          )}
+        </div>
+
         {/* Language */}
         <select
-          className="w-full p-2 rounded bg-white/20 mb-3"
+          className="w-full p-2 rounded bg-white/20 mb-2"
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
         >
-          <option>Hindi</option>
-          <option>English</option>
-          <option>Urdu</option>
+          <option style={{ color: "black" }}>English</option>
+          <option style={{ color: "black" }}>Hindi</option>
+          <option style={{ color: "black" }}>Urdu</option>
         </select>
 
         {/* Voice */}
@@ -90,13 +232,16 @@ export default function Home() {
           value={voice}
           onChange={(e) => setVoice(e.target.value)}
         >
-          <option value="female">Female</option>
-          <option value="male">Male</option>
+          {voiceOptions[language].map((v: any, i: number) => (
+            <option key={i} value={v.value} style={{ color: "black" }}>
+              {v.label}
+            </option>
+          ))}
         </select>
 
         {/* Text */}
         <textarea
-          className="w-full p-2 rounded bg-white/20 mb-3"
+          className="w-full p-3 rounded bg-white/20 mb-3"
           rows={4}
           placeholder="Type your text..."
           value={text}
@@ -111,7 +256,7 @@ export default function Home() {
           max="50"
           value={speed}
           onChange={(e) => setSpeed(Number(e.target.value))}
-          className="w-full mb-3"
+          className="w-full mb-2"
         />
 
         {/* Pitch */}
@@ -131,62 +276,52 @@ export default function Home() {
           value={mood}
           onChange={(e) => setMood(e.target.value)}
         >
-          <option value="normal">Normal</option>
-          <option value="happy">Happy</option>
-          <option value="sad">Sad</option>
-          <option value="angry">Angry</option>
-          <option value="excited">Excited</option>
-          <option value="funny">Funny</option>
-          <option value="shocked">Shocked</option>
+          <option style={{ color: "black" }} value="normal">Normal</option>
+          <option style={{ color: "black" }} value="happy">Happy</option>
+          <option style={{ color: "black" }} value="sad">Sad</option>
+          <option style={{ color: "black" }} value="angry">Angry</option>
+          <option style={{ color: "black" }} value="excited">Excited</option>
         </select>
 
-        {/* Button */}
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
+        {/* Convert */}
+        <button
           onClick={convertAudio}
-          className="w-full bg-white text-black p-2 rounded font-bold"
+          disabled={!text.trim() || loading}
+          className={`w-full p-2 rounded font-bold ${
+            !text.trim() || loading
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-white text-black hover:bg-gray-200"
+          }`}
         >
-          {loading ? "Generating..." : "Convert"}
-        </motion.button>
+          {loading ? "⏳ Generating..." : "Convert"}
+        </button>
 
-        {/* Waveform Animation */}
-        {loading && (
-          <div className="flex justify-center mt-4 gap-1">
-            {[...Array(10)].map((_, i) => (
-              <motion.div
-                key={i}
-                animate={{ height: [10, 30, 10] }}
-                transition={{
-                  repeat: Infinity,
-                  duration: 1,
-                  delay: i * 0.1
-                }}
-                className="w-1 bg-white"
-              />
-            ))}
+        {/* Audio */}
+        {!loading && audioUrl && (
+          <div className="mt-4 p-4 bg-white/10 rounded-lg text-center">
+
+            <audio controls src={audioUrl} className="w-full mb-3" />
+
+            {!isLoggedIn ? (
+              <button
+                onClick={() => signIn("google")}
+                className="w-full bg-yellow-500 text-black p-2 rounded"
+              >
+                Login to Download
+              </button>
+            ) : (
+              <button
+                onClick={() => handleDownload(audioUrl)}
+                className="w-full bg-green-500 text-white p-2 rounded"
+              >
+                Download Audio
+              </button>
+            )}
+
           </div>
         )}
 
-        {/* Audio */}
-        {audioUrl && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mt-4"
-          >
-            <audio controls src={audioUrl} className="w-full" />
-
-            <button
-              onClick={() => window.open(audioUrl)}
-              className="mt-2 w-full bg-green-500 text-white p-2 rounded"
-            >
-              Download
-            </button>
-          </motion.div>
-        )}
-
-      </motion.div>
+      </div>
     </main>
   );
 }
