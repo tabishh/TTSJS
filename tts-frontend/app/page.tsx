@@ -73,7 +73,7 @@ export default function Home() {
     try {
       const moodSettings = applyMood();
 
-      const res = await fetch("http://127.0.0.1:8000/generate-audio", {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/generate-audio`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
