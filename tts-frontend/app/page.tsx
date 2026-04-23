@@ -60,7 +60,7 @@ export default function Home() {
     }
   };
 
-  // 🎯 Generate Audio
+  // 🔥 FIXED AUDIO LOGIC
   const convertAudio = async () => {
     if (!text.trim()) return;
 
@@ -70,22 +70,23 @@ export default function Home() {
     try {
       const moodSettings = applyMood();
 
-      // 🔥 Step 1: Generate audio
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/generate-audio`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "ngrok-skip-browser-warning": "true"
-          },
-          body: JSON.stringify({ text })
-        }
-      );
+      const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/generate-audio`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true"
+        },
+        body: JSON.stringify({
+          text,
+          language,
+          voice,
+          rate: moodSettings.rate,
+          pitch: moodSettings.pitch
+        })
+      });
 
       const data = await res.json();
 
-      // 🔥🔥 Step 2: Fetch audio as blob (THIS FIXES YOUR ISSUE)
       const audioRes = await fetch(data.audio_url, {
         headers: {
           "ngrok-skip-browser-warning": "true"
@@ -95,87 +96,13 @@ export default function Home() {
       const blob = await audioRes.blob();
       const blobUrl = URL.createObjectURL(blob);
 
-      setAudioUrl(blobUrl); // ✅ use blob instead of direct URL
+      setAudioUrl(blobUrl);
 
     } catch {
       alert("Error generating audio");
     }
 
     setLoading(false);
-  };
-
-  const handleDownload = async (url: string) => {
-    if (!isLoggedIn) {
-      signIn("google");
-      return;
-    }
-
-    const res = await fetch("/api/track-download", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        email: session?.user?.email
-      })
-    });
-
-    const data = await res.json();
-
-    if (data.allowed) {
-      window.open(url);
-      return;
-    }
-
-    const orderRes = await fetch("/api/create-order", {
-      method: "POST"
-    });
-
-    const order = await orderRes.json();
-
-    const options = {
-      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-      amount: order.amount,
-      currency: "INR",
-      name: "TTS Audio",
-      description: "Audio Download",
-      order_id: order.id,
-
-      handler: async function (response: any) {
-        try {
-          const verifyRes = await fetch("/api/verify-payment", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(response)
-          });
-
-          const verifyData = await verifyRes.json();
-
-          if (verifyData.success) {
-            alert("Payment verified ✅");
-            window.open(url);
-          } else {
-            alert("Payment verification failed ❌");
-          }
-
-        } catch {
-          alert("Verification error");
-        }
-      },
-
-      prefill: {
-        email: session?.user?.email
-      },
-
-      theme: {
-        color: "#6366f1"
-      }
-    };
-
-    const rzp = new (window as any).Razorpay(options);
-    rzp.open();
   };
 
   return (
@@ -191,29 +118,115 @@ export default function Home() {
           ✨ 3 Free downloads per day • ₹2 per download after
         </p>
 
-        {/* (UI unchanged below) */}
+        {/* Login */}
+        <div className="mb-4 flex justify-between items-center">
+          {isLoggedIn ? (
+            <>
+              <span className="text-sm truncate">
+                👤 {session?.user?.email}
+              </span>
+              <button
+                onClick={() => signOut()}
+                className="bg-red-500 px-3 py-1 rounded text-sm"
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => signIn("google")}
+              className="w-full bg-blue-500 p-2 rounded"
+            >
+              Login
+            </button>
+          )}
+        </div>
 
+        {/* Language */}
+        <select
+          className="w-full p-2 rounded bg-white/20 mb-2"
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+        >
+          <option style={{ color: "black" }}>English</option>
+          <option style={{ color: "black" }}>Hindi</option>
+          <option style={{ color: "black" }}>Urdu</option>
+        </select>
+
+        {/* Voice */}
+        <select
+          className="w-full p-2 rounded bg-white/20 mb-3"
+          value={voice}
+          onChange={(e) => setVoice(e.target.value)}
+        >
+          {voiceOptions[language].map((v: any, i: number) => (
+            <option key={i} value={v.value} style={{ color: "black" }}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+
+        {/* Text */}
+        <textarea
+          className="w-full p-3 rounded bg-white/20 mb-3"
+          rows={4}
+          placeholder="Type your text..."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+
+        {/* Speed */}
+        <label>Speed: {speed}%</label>
+        <input
+          type="range"
+          min="-50"
+          max="50"
+          value={speed}
+          onChange={(e) => setSpeed(Number(e.target.value))}
+          className="w-full mb-2"
+        />
+
+        {/* Pitch */}
+        <label>Pitch: {pitch}Hz</label>
+        <input
+          type="range"
+          min="-50"
+          max="50"
+          value={pitch}
+          onChange={(e) => setPitch(Number(e.target.value))}
+          className="w-full mb-3"
+        />
+
+        {/* Mood */}
+        <select
+          className="w-full p-2 rounded bg-white/20 mb-3"
+          value={mood}
+          onChange={(e) => setMood(e.target.value)}
+        >
+          <option style={{ color: "black" }} value="normal">Normal</option>
+          <option style={{ color: "black" }} value="happy">Happy</option>
+          <option style={{ color: "black" }} value="sad">Sad</option>
+          <option style={{ color: "black" }} value="angry">Angry</option>
+          <option style={{ color: "black" }} value="excited">Excited</option>
+        </select>
+
+        {/* Convert */}
+        <button
+          onClick={convertAudio}
+          disabled={!text.trim() || loading}
+          className={`w-full p-2 rounded font-bold ${
+            !text.trim() || loading
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-white text-black hover:bg-gray-200"
+          }`}
+        >
+          {loading ? "⏳ Generating..." : "Convert"}
+        </button>
+
+        {/* Audio */}
         {!loading && audioUrl && (
           <div className="mt-4 p-4 bg-white/10 rounded-lg text-center">
-
-            <audio key={audioUrl} controls src={audioUrl} className="w-full mb-3" />
-
-            {!isLoggedIn ? (
-              <button
-                onClick={() => signIn("google")}
-                className="w-full bg-yellow-500 text-black p-2 rounded"
-              >
-                Login to Download
-              </button>
-            ) : (
-              <button
-                onClick={() => handleDownload(audioUrl)}
-                className="w-full bg-green-500 text-white p-2 rounded"
-              >
-                Download Audio
-              </button>
-            )}
-
+            <audio controls src={audioUrl} className="w-full mb-3" />
           </div>
         )}
 
