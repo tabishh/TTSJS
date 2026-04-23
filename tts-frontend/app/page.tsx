@@ -16,8 +16,10 @@ export default function Home() {
   const [mood, setMood] = useState("normal");
 
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Load Razorpay
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
@@ -60,12 +62,13 @@ export default function Home() {
     }
   };
 
-  // 🔥 FIXED AUDIO LOGIC
+  // 🎯 Generate Audio
   const convertAudio = async () => {
     if (!text.trim()) return;
 
     setLoading(true);
     setAudioUrl(null);
+    setDownloadUrl(null);
 
     try {
       const moodSettings = applyMood();
@@ -87,6 +90,10 @@ export default function Home() {
 
       const data = await res.json();
 
+      // Save real URL for download
+      setDownloadUrl(data.audio_url);
+
+      // Fetch audio blob for playback (ngrok fix)
       const audioRes = await fetch(data.audio_url, {
         headers: {
           "ngrok-skip-browser-warning": "true"
@@ -98,11 +105,84 @@ export default function Home() {
 
       setAudioUrl(blobUrl);
 
-    } catch {
+    } catch (err) {
+      console.error(err);
       alert("Error generating audio");
     }
 
     setLoading(false);
+  };
+
+  // 💰 Download + Payment
+  const handleDownload = async () => {
+    if (!downloadUrl) return;
+
+    if (!isLoggedIn) {
+      signIn("google");
+      return;
+    }
+
+    const res = await fetch("/api/track-download", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        email: session?.user?.email
+      })
+    });
+
+    const data = await res.json();
+
+    if (data.allowed) {
+      window.open(downloadUrl);
+      return;
+    }
+
+    const orderRes = await fetch("/api/create-order", {
+      method: "POST"
+    });
+
+    const order = await orderRes.json();
+
+    const options = {
+      key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: "INR",
+      name: "TTS Audio",
+      description: "Audio Download",
+      order_id: order.id,
+
+      handler: async function (response: any) {
+        const verifyRes = await fetch("/api/verify-payment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(response)
+        });
+
+        const verifyData = await verifyRes.json();
+
+        if (verifyData.success) {
+          alert("Payment verified ✅");
+          window.open(downloadUrl);
+        } else {
+          alert("Payment failed ❌");
+        }
+      },
+
+      prefill: {
+        email: session?.user?.email
+      },
+
+      theme: {
+        color: "#6366f1"
+      }
+    };
+
+    const rzp = new (window as any).Razorpay(options);
+    rzp.open();
   };
 
   return (
@@ -223,10 +303,28 @@ export default function Home() {
           {loading ? "⏳ Generating..." : "Convert"}
         </button>
 
-        {/* Audio */}
+        {/* Audio + Download */}
         {!loading && audioUrl && (
           <div className="mt-4 p-4 bg-white/10 rounded-lg text-center">
+
             <audio controls src={audioUrl} className="w-full mb-3" />
+
+            {!isLoggedIn ? (
+              <button
+                onClick={() => signIn("google")}
+                className="w-full bg-yellow-500 text-black p-2 rounded"
+              >
+                Login to Download
+              </button>
+            ) : (
+              <button
+                onClick={handleDownload}
+                className="w-full bg-green-500 text-white p-2 rounded"
+              >
+                Download Audio
+              </button>
+            )}
+
           </div>
         )}
 
