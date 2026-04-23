@@ -73,19 +73,17 @@ export default function Home() {
     try {
       const moodSettings = applyMood();
 
-      const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/generate-audio`, {
+      const res = await fetch(
+      `${process.env.NEXT_PUBLIC_BACKEND_URL}/generate-audio`,
+      {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true" // 🔥 IMPORTANT
         },
-        body: JSON.stringify({
-          text,
-          language,
-          voice,
-          rate: moodSettings.rate,
-          pitch: moodSettings.pitch
-        })
-      });
+        body: JSON.stringify({ text })
+      }
+    );
 
       const data = await res.json();
       setAudioUrl(data.audio_url);
